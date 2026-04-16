@@ -212,7 +212,7 @@ export class LayoutViewModel {
         }
         let remainHeight = (realHeight + gutter - (itemSize + gutter) * row)
         realHeight -= remainHeight
-        marginTop = remainHeight / 2 + this.mSysUITopHeight
+        marginTop = this.mSysUITopHeight
     }
     //set desktop icon
     let ratio = this.mLauncherLayoutStyleConfig.mIconRatio;
