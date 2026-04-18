@@ -22,18 +22,19 @@ import { EventConstants } from '@ohos/common';
 import { windowManager } from '@ohos/common';
 import { localEventManager } from '@ohos/common';
 import { SettingsModel, LayoutViewModel } from '@ohos/common';
-import { RemoteWindowWrapper } from '@ohos/common/component';
 import { SmartDock } from '@ohos/smartdock/component';
 import { PageDesktopLayout } from '@ohos/pagedesktop/component';
 import { BigFolderConstants, BigFolderStyleConfig } from '@ohos/bigfolder';
 import { FolderOpenComponent } from '@ohos/bigfolder/component';
 import PadStage from '../common/PadStage';
+// No RemoteWindowWrapper: its windowAnimationManager.setController overrides the system app-transition and suppresses startWindowIcon splashes.
 import StyleConstants from '../common/constants/StyleConstants';
 import { FormStyleConfig } from '@ohos/form';
 import AppCenterGridStyleConfig from '@ohos/appcenter/src/main/ets/default/common/AppCenterGridStyleConfig';
 import PadPageDesktopGridStyleConfig from '../common/PadPageDesktopGridStyleConfig';
 import { SmartDockStyleConfig } from '@ohos/smartdock';
 import display from '@ohos.display';
+import systemParameter from '@ohos.systemparameter';
 
 const RAW_IMAGE_CACHE_SIZE = 20000000;
 const TAG = 'EntryView';
@@ -54,9 +55,6 @@ struct EntryView {
   private mStage: PadStage = new PadStage();
   private navigationBarStatus: string | undefined;
   private mOrientationListener = mediaquery.matchMediaSync('(orientation: landscape)');
-  @State mAppScaleX: number = 1.0;
-  @State mAppScaleY: number = 1.0;
-  @State mAppAlpha: number = 1.0;
   @StorageLink('IsSetImageRawDataCacheSize') isSetImageRawDataCacheSize?: boolean = undefined;
   async onPortrait(mediaQueryResult: mediaquery.MediaQueryResult) {
     if (mediaQueryResult.matches) {
@@ -90,9 +88,7 @@ struct EntryView {
 
   registerPageDesktopNavigatorStatusChangeEvent(listener: LocalEventListener): void {
     localEventManager.registerEventListener(listener, [
-      EventConstants.EVENT_NAVIGATOR_BAR_STATUS_CHANGE,
-      EventConstants.EVENT_ANIMATION_START_APPLICATION,
-      EventConstants.EVENT_ANIMATION_CLOSE_APPLICATION
+      EventConstants.EVENT_NAVIGATOR_BAR_STATUS_CHANGE
     ]);
   }
 
@@ -102,35 +98,9 @@ struct EntryView {
       if (event === EventConstants.EVENT_NAVIGATOR_BAR_STATUS_CHANGE) {
         this.navigationBarStatus = params;
         this.updateScreenInfo();
-      } else if (event === EventConstants.EVENT_ANIMATION_START_APPLICATION) {
-        this.startAppAnimation();
-      } else if (event === EventConstants.EVENT_ANIMATION_CLOSE_APPLICATION) {
-        this.closeAppAnimation();
       }
     }
   };
-
-  private startAppAnimation(): void {
-    animateTo({
-      duration: 500,
-      curve: Curve.Friction,
-      onFinish: () => {},
-    }, () => {
-      this.mAppScaleX = 0.95;
-      this.mAppScaleY = 0.95;
-    })
-  }
-
-  private closeAppAnimation(): void {
-    animateTo({
-      duration: 370,
-      delay: 0,
-      curve: Curve.Friction,
-    }, () => {
-      this.mAppScaleX = 1.0;
-      this.mAppScaleY = 1.0;
-    })
-  }
 
   private updateScreenInfo(): void {
     Log.showInfo(TAG, 'updateScreenInfo');
@@ -155,6 +125,11 @@ struct EntryView {
       app.setImageRawDataCacheSize(RAW_IMAGE_CACHE_SIZE);
       app.setImageCacheCount(100);
       this.isSetImageRawDataCacheSize = true;
+    }
+    try {
+      systemParameter.setSync('bootevent.launcher.ready', 'true');
+    } catch (err) {
+      Log.showError(TAG, `set bootevent.launcher.ready err, ${JSON.stringify(err)}`);
     }
   }
 
@@ -238,13 +213,10 @@ struct EntryView {
       }
       .width('100%')
       .height('100%')
-      .scale({ x: this.mAppScaleX, y: this.mAppScaleY })
-      .opacity(this.mAppAlpha)
 
       if ((AppStorage.get<number>('openFolderStatus') as number) !== BigFolderConstants.OPEN_FOLDER_STATUS_CLOSE) {
         FolderOpenComponent();
       }
-      RemoteWindowWrapper();
     }
     .backgroundImage(StyleConstants.DEFAULT_BACKGROUND_IMAGE)
     .backgroundImageSize(ImageSize.Cover)

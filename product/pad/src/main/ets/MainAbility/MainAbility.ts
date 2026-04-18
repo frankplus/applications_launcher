@@ -58,27 +58,26 @@ export default class MainAbility extends ServiceExtension {
     // init Gesture navigation
     this.startGestureNavigation();
 
-    // init rdb
-    let dbStore = RdbStoreManager.getInstance();
-    await dbStore.initRdbConfig();
-    await dbStore.createTable();
-
     let registerWinEvent = (win) => {
-      win.on('lifeCycleEvent', (stageEventType) => {
-        // 桌面获焦或失焦时，通知桌面的卡片变为可见状态
-        if (stageEventType === Window.WindowStageEventType.INACTIVE
-        || stageEventType === Window.WindowStageEventType.ACTIVE) {
+      win.on('windowEvent', (stageEventType) => {
+        if (stageEventType === Window.WindowEventType.WINDOW_ACTIVE) {
+          launcherAbilityManager.checkBundleMonitor();
           localEventManager.sendLocalEventSticky(EventConstants.EVENT_REQUEST_FORM_ITEM_VISIBLE, null);
-          Log.showInfo(TAG, `lifeCycleEvent change: ${stageEventType}`);
+          Log.showInfo(TAG, `windowEvent change: ${stageEventType}`);
         }
       })
     };
 
     windowManager.registerWindowEvent();
     navigationBarCommonEventManager.registerNavigationBarEvent();
-    // create Launcher entry view
+    // create Launcher entry view first so the first frame isn't gated on RDB init
     windowManager.createWindow(globalThis.desktopContext, windowManager.DESKTOP_WINDOW_NAME,
       windowManager.DESKTOP_RANK, 'pages/' + windowManager.DESKTOP_WINDOW_NAME, true, registerWinEvent);
+
+    // init rdb after window creation
+    let dbStore = RdbStoreManager.getInstance();
+    await dbStore.initRdbConfig();
+    await dbStore.createTable();
 
     // load recent
     windowManager.createRecentWindow();
@@ -178,7 +177,6 @@ export default class MainAbility extends ServiceExtension {
       windowManager.minimizeAllApps();
     }
     windowManager.hideWindow(windowManager.RECENT_WINDOW_NAME);
-    windowManager.destroyWindow(windowManager.APP_CENTER_WINDOW_NAME);
     this.closeFolder();
     this.closeRecentDockPopup();
   }
