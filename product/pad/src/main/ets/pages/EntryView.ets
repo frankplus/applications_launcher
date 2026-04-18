@@ -213,6 +213,18 @@ struct EntryView {
       }
       .width('100%')
       .height('100%')
+      .onAreaChange((oldValue: Area, newValue: Area) => {
+        const h = newValue.height as number;
+        if (!h || h <= 0) {
+          return;
+        }
+        const prev = AppStorage.get<number>('availableLayoutHeight');
+        if (prev === h) {
+          return;
+        }
+        AppStorage.setOrCreate('availableLayoutHeight', h);
+        this.updateScreenInfo();
+      })
 
       if ((AppStorage.get<number>('openFolderStatus') as number) !== BigFolderConstants.OPEN_FOLDER_STATUS_CLOSE) {
         FolderOpenComponent();
@@ -223,5 +235,6 @@ struct EntryView {
     .backgroundImagePosition(Alignment.Center)
     .width('100%')
     .height('100%')
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

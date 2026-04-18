@@ -168,7 +168,12 @@ export class LayoutViewModel {
       maxDockNum = maxNum - maxRecentNum;
     }
     this.mDockHeight = iconSize + 2 * dockPadding + marginBottom;
-    this.mWorkSpaceHeight = this.mScreenHeight - this.mSysUIBottomHeight - this.mDockHeight;
+    const availableH = AppStorage.get<number>('availableLayoutHeight');
+    if (availableH && availableH > 0) {
+      this.mWorkSpaceHeight = availableH - this.mDockHeight;
+    } else {
+      this.mWorkSpaceHeight = this.mScreenHeight - this.mSysUIBottomHeight - this.mDockHeight;
+    }
     let result = {
       mDockGap: dockGap,
       mIconSize: iconSize,
