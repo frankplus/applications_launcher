@@ -78,8 +78,11 @@ export default class MainAbility extends ServiceExtension {
     this.initGlobalConst();
     this.displayManager = DisplayManager.getInstance();
 
-    // init Gesture navigation
-    this.startGestureNavigation();
+    // Gesture navigation is owned by systemui's phone_gestureNavigation
+    // ServiceExtAbility (OniroRecentsOverlay). The stock launcher monitor
+    // would also fire on the same swipe-up and open a second, overlapping
+    // RecentView window.
+    // this.startGestureNavigation();
     windowManager.registerWindowEvent();
     navigationBarCommonEventManager.registerNavigationBarEvent();
 
