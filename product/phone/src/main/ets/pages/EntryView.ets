@@ -20,6 +20,7 @@ import { windowManager } from '@ohos/common';
 import { localEventManager } from '@ohos/common';
 import { SettingsModel } from '@ohos/common';
 import { LayoutViewModel } from '@ohos/common';
+import { WallpaperModel } from '@ohos/common';
 import { SmartDock } from '@ohos/smartdock/component';
 import { PageDesktopLayout } from '@ohos/pagedesktop/component';
 import { FolderOpenComponent } from '@ohos/bigfolder/component';
@@ -30,6 +31,7 @@ import { SmartDockStyleConfig } from '@ohos/smartdock';
 import PhonePageDesktopGridStyleConfig from '../common/PhonePageDesktopGridStyleConfig';
 import { FormStyleConfig } from '@ohos/form';
 import systemParameter from '@ohos.systemparameter';
+import image from '@ohos.multimedia.image';
 
 const TAG = 'EntryView';
 
@@ -40,6 +42,13 @@ interface LocalEventListener {
 @Entry
 @Component
 struct EntryView {
+  // System wallpaper from WallpaperModel (@ohos/common). Held in local @State —
+  // a PixelMap routed via AppStorage to this window renders transparent, so the
+  // model hands it to us directly. Updates live on wallpaper change.
+  @State wallpaper: image.PixelMap | undefined = undefined;
+  private wpListener: (pm: image.PixelMap) => void = (pm: image.PixelMap): void => {
+    this.wallpaper = pm;
+  };
   @StorageLink('screenWidth') screenWidth: number = 0;
   @StorageLink('screenHeight') @Watch('updateScreenInfo') screenHeight: number = 0;
   @StorageLink('deviceType') deviceType: string = CommonConstants.DEFAULT_DEVICE_TYPE;
@@ -64,6 +73,7 @@ struct EntryView {
 
   aboutToAppear(): void {
     Log.showInfo(TAG, 'aboutToAppear');
+    WallpaperModel.getInstance().subscribe(this.wpListener);
     this.mStage.onCreate();
     this.navigationBarStatus = SettingsModel.getInstance().getValue();
     this.getWindowSize();
@@ -100,6 +110,7 @@ struct EntryView {
   };
 
   aboutToDisappear(): void {
+    WallpaperModel.getInstance().unsubscribe(this.wpListener);
     this.mStage.onDestroy();
     Log.showInfo(TAG, 'aboutToDisappear');
   }
@@ -148,6 +159,19 @@ struct EntryView {
 
   build() {
     Stack() {
+      // Managed system wallpaper (PixelMap from WallpaperModel) as an edge-to-
+      // edge Image — .backgroundImage can't render a PixelMap on this build.
+      // Only drawn once the PixelMap is in; until then the Stack's
+      // .backgroundImage default below shows through (and stays as the fallback
+      // if the wallpaper manager ever fails to provide one).
+      if (this.wallpaper) {
+        Image(this.wallpaper)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+            [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+      }
       if (this.loaded) {
         Flex({ direction: FlexDirection.Column, alignItems: ItemAlign.Center, justifyContent: FlexAlign.Start }) {
           Column() {

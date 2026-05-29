@@ -76,7 +76,8 @@ export {
   PageDesktopModel,
   RecentMissionsModel,
   SettingsModelObserver,
-  AtomicServiceAppModel
+  AtomicServiceAppModel,
+  WallpaperModel
 } from './src/main/ets/default/model'
 
 export {

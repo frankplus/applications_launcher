@@ -26,3 +26,5 @@ export { RecentMissionsModel } from './RecentMissionsModel'
 export { SettingsModelObserver } from './SettingsModelObserver'
 
 export { AtomicServiceAppModel } from './AtomicServiceAppModel'
+
+export { WallpaperModel } from './WallpaperModel'

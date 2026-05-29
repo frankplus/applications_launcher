@@ -21,6 +21,8 @@ import { LayoutViewModel } from '@ohos/common';
 import { SmartDock } from '@ohos/smartdock/component';
 import { AppGridLayout } from '@ohos/appcenter/component';
 import { AppGridViewModel } from '@ohos/appcenter';
+import { WallpaperModel } from '@ohos/common';
+import image from '@ohos.multimedia.image';
 
 const TAG = 'AppCenterView';
 
@@ -32,6 +34,13 @@ interface AnimationInfo {
 @Entry
 @Component
 struct AppCenterView {
+  // Shared system wallpaper (WallpaperModel, @ohos/common); matches the home
+  // screen. Held in local @State — a PixelMap routed via AppStorage to this
+  // window renders transparent, so the model hands it to us directly.
+  @State wallpaper: image.PixelMap | undefined = undefined;
+  private wpListener: (pm: image.PixelMap) => void = (pm: image.PixelMap): void => {
+    this.wallpaper = pm;
+  };
   @State workSpaceHeight: number = 0;
   @State dockHeight: number = 0;
   @State device: string = CommonConstants.PAD_DEVICE_TYPE;
@@ -45,6 +54,7 @@ struct AppCenterView {
 
   aboutToAppear(): void {
     Log.showInfo(TAG, 'aboutToAppear');
+    WallpaperModel.getInstance().subscribe(this.wpListener);
     AppStorage.setOrCreate('deviceType', this.device);
     this.mLayoutViewModel = LayoutViewModel.getInstance();
   }
@@ -64,6 +74,7 @@ struct AppCenterView {
 
   aboutToDisappear(): void {
     Log.showInfo(TAG, 'aboutToDisappear');
+    WallpaperModel.getInstance().unsubscribe(this.wpListener);
     this.mAppGridViewModel.unregisterAppListChange();
     this.mAppGridViewModel.unregisterEventListener();
   }
@@ -87,6 +98,17 @@ struct AppCenterView {
 
   build() {
     Stack() {
+      // Managed system wallpaper (PixelMap from WallpaperModel) as an edge-to-
+      // edge Image; until it loads the Stack's .backgroundImage default below
+      // shows through (and remains the fallback if loading ever fails).
+      if (this.wallpaper) {
+        Image(this.wallpaper)
+          .width('100%')
+          .height('100%')
+          .objectFit(ImageFit.Cover)
+          .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+            [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+      }
       if (this.buildLog()) {}
       Column() {
         Column() {

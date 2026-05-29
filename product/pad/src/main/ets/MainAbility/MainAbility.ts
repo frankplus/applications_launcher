@@ -28,7 +28,8 @@ import {
   navigationBarCommonEventManager,
   localEventManager,
   EventConstants,
-  DisplayManager
+  DisplayManager,
+  WallpaperModel
 } from '@ohos/common';
 import { GestureNavigationManager } from '@ohos/gesturenavigation';
 import StyleConstants from '../common/constants/StyleConstants';
@@ -51,6 +52,10 @@ export default class MainAbility extends ServiceExtension {
   async initLauncher(): Promise<void> {
     // init Launcher context
     globalThis.desktopContext = this.context;
+    // Pre-warm the system wallpaper from the wallpaper manager so the home
+    // screen (EntryView) shows the one managed wallpaper instead of a hardcoded
+    // asset; pages subscribe and keep it live.
+    WallpaperModel.getInstance().start();
 
     // init global const
     this.initGlobalConst();
