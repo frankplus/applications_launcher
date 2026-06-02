@@ -27,6 +27,9 @@ const TAG = 'LayoutViewModel';
  * layout viewmodel
  */
 export class LayoutViewModel {
+  // Bottom margin (vp) reserved in gesture-navigation mode, matching the
+  // systemui home-indicator strip height so the dock clears the indicator.
+  private static readonly GESTURE_INDICATOR_HEIGHT_VP = 24;
   private mIsPad = true;
   private mScreenHeight: number | undefined;
   private mScreenWidth: number | undefined;
@@ -87,7 +90,11 @@ export class LayoutViewModel {
         this.mSysUIBottomHeight = this.mLauncherLayoutStyleConfig.mSysBottomHeight * this.mScreenWidth / 360;
       }
     } else {
-      this.mSysUIBottomHeight = 0;
+      // Gesture-navigation mode: systemui keeps a thin 24vp home-indicator
+      // strip (a real nav-bar window) reserved at the bottom edge. Mirror that
+      // height here so the dock/workspace leave the same margin instead of
+      // running all the way to the screen edge and underlapping the indicator.
+      this.mSysUIBottomHeight = LayoutViewModel.GESTURE_INDICATOR_HEIGHT_VP;
     }
     AppStorage.setOrCreate('sysUIBottomHeight', this.mSysUIBottomHeight);
     this.mIndicatorHeight = this.mLauncherLayoutStyleConfig.mIndicatorHeight;
