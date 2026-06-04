@@ -32,6 +32,9 @@ import PhonePageDesktopGridStyleConfig from '../common/PhonePageDesktopGridStyle
 import { FormStyleConfig } from '@ohos/form';
 import systemParameter from '@ohos.systemparameter';
 import image from '@ohos.multimedia.image';
+import windowAnimationManager from '@ohos.animation.windowAnimationManager';
+import OniroRemoteWindowController from '../common/OniroRemoteWindowController';
+import { OniroRemoteWindowHost } from './OniroRemoteWindowHost';
 
 const TAG = 'EntryView';
 
@@ -58,6 +61,12 @@ struct EntryView {
   @State dockHeight: number = 0;
   private mStage: PhoneStage = new PhoneStage();
   private navigationBarStatus: string | undefined;
+  // Claims the WMS remote-animation slot: renders the appearing app via a
+  // RemoteWindow (so apps open) and no-ops minimize/close (so the default
+  // app-close zoom never plays). For the swipe-up-to-home gesture this removes
+  // the duplicate WMS close zoom that played on top of systemui's own
+  // shrink-to-bottom animation. See OniroRemoteWindowController.
+  private animationController: OniroRemoteWindowController = new OniroRemoteWindowController();
 
   onPageShow(): void {
     Log.showInfo(TAG, 'onPageShow');
@@ -81,6 +90,33 @@ struct EntryView {
 
     this.registerPageDesktopNavigatorStatusChangeEvent(this.mLocalEventListener);
 
+    this.registerWindowAnimationController();
+  }
+
+  // Register from the EntryView page (the launcher window's ArkUI thread),
+  // NOT from MainAbility.onCreate: that's a ServiceExtensionAbility, and the
+  // RS controller's callbacks are dispatched on the main event runner — so
+  // an off-thread registration crashes in libace_napi at onScreenUnlock.
+  //
+  // Gated behind a param because the RS window-animation controller itself
+  // has a thread-safety bug: `thread_local jsController_` in
+  // rs_window_animation_controller.cpp is set on this (registering) thread
+  // but the callbacks are posted to GetMainEventRunner(), so jsController_/
+  // env_ are cross-thread and the FIRST onScreenUnlock SIGBUSes in
+  // libace_napi.z.so+0x91728 — crash-looping the launcher. Enable ONLY on an
+  // image that carries the graphic_2d fix (jsController_ as a class member +
+  // napi_send_event dispatch):  param set persist.oniro.winanim_controller 1
+  private registerWindowAnimationController(): void {
+    if (systemParameter.getSync('persist.oniro.winanim_controller', '0') !== '1') {
+      Log.showInfo(TAG, 'window animation controller disabled by param');
+      return;
+    }
+    try {
+      windowAnimationManager.setController(this.animationController);
+      Log.showInfo(TAG, 'no-op window animation controller registered');
+    } catch (err) {
+      Log.showError(TAG, `setController failed: ${JSON.stringify(err)}`);
+    }
   }
 
   registerPageDesktopNavigatorStatusChangeEvent(listener: LocalEventListener): void {
@@ -198,6 +234,11 @@ struct EntryView {
 
         FolderOpenComponent();
       }
+
+      // Renders RemoteWindow proxies for apps being opened (so they appear at
+      // full), while OniroRemoteWindowController no-ops the close zoom. On top
+      // of the desktop, non-interactive.
+      OniroRemoteWindowHost()
     }
     .backgroundImage(StyleConstants.DEFAULT_BACKGROUND_IMAGE)
     .backgroundImageSize(ImageSize.Cover)

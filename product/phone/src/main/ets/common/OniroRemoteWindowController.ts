@@ -1,0 +1,134 @@
+/*
+ * Copyright (c) 2026 Francesco Pham
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import windowAnimationManager from '@ohos.animation.windowAnimationManager';
+import { Log } from '@ohos/common';
+
+const TAG = 'OniroRemoteWindowController';
+
+// AppStorage key shared with OniroRemoteWindowHost (rendered in EntryView).
+export const REMOTE_WINDOW_LIST_KEY = 'OniroRemoteWindowList';
+
+/**
+ * One pending app-appearance. Holds the RemoteWindow target and the WMS
+ * "animation finished" callback. The host component renders a `RemoteWindow`
+ * for `target` (which restores the leash's context alpha → the app becomes
+ * visible), then calls `finishCallback` and drops the item.
+ */
+export class RemoteWindowItem {
+  key: string;
+  // Optional so a placeholder `new RemoteWindowItem('')` can satisfy the host
+  // component's default member init; real items always carry both.
+  target?: windowAnimationManager.WindowAnimationTarget;
+  finishCallback?: windowAnimationManager.WindowAnimationFinishedCallback;
+
+  constructor(key: string, target?: windowAnimationManager.WindowAnimationTarget,
+    finishCallback?: windowAnimationManager.WindowAnimationFinishedCallback) {
+    this.key = key;
+    this.target = target;
+    this.finishCallback = finishCallback;
+  }
+}
+
+/**
+ * Oniro phone launcher window-animation controller.
+ *
+ * Registering ANY controller makes the WMS route window transitions through it
+ * (and hide the appearing app's leash, context alpha 0, until a proxy renders
+ * it back). This controller:
+ *  - START / app-transition: hands the appearing target to OniroRemoteWindowHost,
+ *    which renders a `RemoteWindow` for it at full size/opacity (no animation) so
+ *    the app shows immediately. This is the supported "render the proxy" contract
+ *    a controller is expected to honour — and the hook for a future custom
+ *    pop-from-icon open animation (animate the RemoteWindow instead of snapping).
+ *  - MINIMIZE / CLOSE: just finish — no render, no animation. This is what
+ *    suppresses the legacy WMS default app-close zoom that used to duplicate the
+ *    systemui swipe-up gesture.
+ *
+ * Must be registered from the EntryView page thread (see EntryView) and needs the
+ * graphic_2d rs_window_animation_controller thread/napi fix. See project memory
+ * winanim_controller_native_boot.
+ */
+export default class OniroRemoteWindowController
+  implements windowAnimationManager.WindowAnimationController {
+
+  private static keyOf(target: windowAnimationManager.WindowAnimationTarget): string {
+    return `${target.bundleName}#${target.abilityName}#${target.missionId}`;
+  }
+
+  // Queue the appearing target for the host to render via RemoteWindow.
+  private show(target: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    if (!target) {
+      finishCallback.onAnimationFinish();
+      return;
+    }
+    const key: string = OniroRemoteWindowController.keyOf(target);
+    const list: RemoteWindowItem[] =
+      (AppStorage.get<RemoteWindowItem[]>(REMOTE_WINDOW_LIST_KEY) ?? []);
+    if (list.some((i: RemoteWindowItem) => i.key === key)) {
+      // Already being shown — don't double-render; just complete this callback.
+      finishCallback.onAnimationFinish();
+      return;
+    }
+    const next: RemoteWindowItem[] = list.slice();
+    next.push(new RemoteWindowItem(key, target, finishCallback));
+    AppStorage.setOrCreate(REMOTE_WINDOW_LIST_KEY, next);
+    Log.showInfo(TAG, `show ${key} (pending=${next.length})`);
+  }
+
+  onStartAppFromLauncher(startingWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    this.show(startingWindowTarget, finishCallback);
+  }
+
+  onStartAppFromRecent(startingWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    this.show(startingWindowTarget, finishCallback);
+  }
+
+  onStartAppFromOther(startingWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    this.show(startingWindowTarget, finishCallback);
+  }
+
+  onAppTransition(fromWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    toWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    // Show the incoming app; the outgoing one is removed by the WMS
+    // (isPlayAnimationHide) with no zoom.
+    this.show(toWindowTarget, finishCallback);
+  }
+
+  onMinimizeWindow(minimizingWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    // No-op: the window is removed without the default zoom-out.
+    finishCallback.onAnimationFinish();
+  }
+
+  onCloseWindow(closingWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    finishCallback.onAnimationFinish();
+  }
+
+  onScreenUnlock(finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    finishCallback.onAnimationFinish();
+  }
+
+  onWindowAnimationTargetsUpdate(fullScreenWindowTarget: windowAnimationManager.WindowAnimationTarget,
+    floatingWindowTargets: Array<windowAnimationManager.WindowAnimationTarget>): void {
+  }
+}
