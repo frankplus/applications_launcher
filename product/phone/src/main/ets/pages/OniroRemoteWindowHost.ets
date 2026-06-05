@@ -14,23 +14,37 @@
  * limitations under the License.
  */
 
+import curves from '@ohos.curves';
 import { Log } from '@ohos/common';
 import { RemoteWindowItem, REMOTE_WINDOW_LIST_KEY } from '../common/OniroRemoteWindowController';
 
 const TAG = 'OniroRemoteWindowHost';
 
-// How long the proxy stays rendered. The RemoteWindow restores the leash's
-// context alpha (→ app visible); after FINISH_MS we tell the WMS the show is
-// done (window becomes a normal composited window), and after REMOVE_MS we drop
-// the proxy. REMOVE_MS > FINISH_MS so the app is permanent before the proxy goes.
-const FINISH_MS: number = 100;
-const REMOVE_MS: number = 450;
+// Open (zoom-in): the appearing app scales up from a slightly shrunk, centered
+// state to full screen, fading in. Scale uses a near-critically-damped spring
+// (smooth, no overshoot); opacity ramps in over OPEN_ALPHA_MS so the app isn't
+// a ghost mid-zoom. Larger spring response = slower / softer settle.
+const OPEN_START_SCALE: number = 0.9;
+const OPEN_ALPHA_MS: number = 180;
+const OPEN_SPRING_RESPONSE: number = 0.4;
+const OPEN_SPRING_DAMPING: number = 0.99;
+
+// After the zoom-in finishes we tell the WMS the show is done (the real window
+// then composites on its own); drop the proxy a beat later so the handoff has
+// no one-frame gap.
+const DROP_DELAY_MS: number = 50;
+// Backup trigger in case onAppear doesn't fire — by this point the component is
+// mounted, so animateTo animates from the start state instead of snapping.
+const PLAY_BACKUP_MS: number = 50;
+// Last-resort: if the animation never runs at all, don't leave the WMS hanging
+// in its animation state. Well past any real animation duration.
+const FALLBACK_MS: number = 1500;
 
 /**
- * Renders a `RemoteWindow` for every target queued by
- * OniroRemoteWindowController, full-screen at full opacity (instant appear).
- * Mounted inside EntryView on top of the desktop, non-interactive. See
- * OniroRemoteWindowController for the why.
+ * Renders a `RemoteWindow` proxy for every appearing app queued by
+ * OniroRemoteWindowController and zooms it in (scale + fade). Mounted inside
+ * EntryView on top of the desktop, non-interactive. See
+ * OniroRemoteWindowController for the routing and why.
  */
 @Component
 export struct OniroRemoteWindowHost {
@@ -55,44 +69,82 @@ export struct OniroRemoteWindowHost {
 struct OniroRemoteWindowCard {
   // Plain (non-reactive) member: passed by reference, rendered once.
   item: RemoteWindowItem = new RemoteWindowItem('');
+  // Animated render transforms on top of the proxy's 1:1 full-display layout.
+  @State scaleVal: number = OPEN_START_SCALE;
+  @State opacityVal: number = 0.0;
+  // Reserved for the future pop-from-icon open: animate translate from the
+  // tapped icon's offset (with .scale center at the icon) instead of a centered
+  // zoom. Kept at 0 for the basic centered zoom.
+  @State translateX: number = 0;
+  @State translateY: number = 0;
+  private played: boolean = false;
+  private done: boolean = false;
 
   aboutToAppear(): void {
+    // Backup play trigger + a finish fallback so we never leave the WMS hanging.
+    setTimeout(() => this.play(), PLAY_BACKUP_MS);
+    setTimeout(() => this.finishAndDrop(), FALLBACK_MS);
+  }
+
+  // Zoom in from the start state to full screen. Idempotent (guarded), so it is
+  // safe to call from both onAppear and the backup timer.
+  private play(): void {
+    if (this.played || !this.item.target) {
+      return;
+    }
+    this.played = true;
+    animateTo({ duration: OPEN_ALPHA_MS, curve: Curve.Friction }, () => {
+      this.opacityVal = 1.0;
+    });
+    // springMotion inlined at the call site (storing it in a typed field breaks
+    // ArkTS type inference for the curve param); response/damping are tunable
+    // consts above.
+    animateTo({ curve: curves.springMotion(OPEN_SPRING_RESPONSE, OPEN_SPRING_DAMPING, 0),
+      onFinish: () => this.finishAndDrop() }, () => {
+      this.scaleVal = 1.0;
+      this.translateX = 0;
+      this.translateY = 0;
+    });
+  }
+
+  // Tell the WMS the show is done, then drop the proxy. Runs once.
+  private finishAndDrop(): void {
+    if (this.done) {
+      return;
+    }
+    this.done = true;
     const key: string = this.item.key;
-    // The RemoteWindow mounts this frame and hands the leash a valid context
-    // alpha (→ app visible). Let it settle, then complete the WMS show state,
-    // then drop the proxy once the window composites on its own.
-    setTimeout(() => {
-      try {
-        this.item.finishCallback?.onAnimationFinish();
-      } catch (e) {
-        Log.showError(TAG, `finish failed for ${key}: ${JSON.stringify(e)}`);
-      }
-    }, FINISH_MS);
+    try {
+      this.item.finishCallback?.onAnimationFinish();
+    } catch (e) {
+      Log.showError(TAG, `finish failed for ${key}: ${JSON.stringify(e)}`);
+    }
     setTimeout(() => {
       const cur: RemoteWindowItem[] =
         (AppStorage.get<RemoteWindowItem[]>(REMOTE_WINDOW_LIST_KEY) ?? []);
       AppStorage.setOrCreate(REMOTE_WINDOW_LIST_KEY,
         cur.filter((i: RemoteWindowItem) => i.key !== key));
-    }, REMOVE_MS);
+    }, DROP_DELAY_MS);
   }
 
   build() {
     if (this.item.target) {
-      // Map the proxy 1:1 onto the full display so the leash keeps its natural
-      // WMS geometry (drawn under the status bar, nav bar reserved by the app's
-      // own safe-area insets). Using target.windowBounds here is WRONG: that's
-      // the *avoid rect* (top = status-bar height), so it would translate+clip
-      // the app down by the status-bar height — a +72px offset that persists
-      // after the proxy is removed (gap below the status bar, launcher behind
-      // it, lost bottom inset). The host Stack is full-screen, so 100%/100% at
-      // origin is the full display.
+      // Map the proxy 1:1 onto the full display (position 0,0 + 100%/100% +
+      // expandSafeArea) so the leash keeps its natural WMS geometry; scale/
+      // translate/opacity are render transforms layered on top. The end state
+      // (scale 1, translate 0, opacity 1) is exactly this 1:1 mapping, so the
+      // handoff to the real composited window after finish is pixel-identical.
+      // scale() defaults to the component centre → a centred zoom.
       RemoteWindow(this.item.target)
         .position({ x: 0, y: 0 })
         .width('100%')
         .height('100%')
-        .opacity(1)
+        .scale({ x: this.scaleVal, y: this.scaleVal })
+        .translate({ x: this.translateX, y: this.translateY })
+        .opacity(this.opacityVal)
         .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
           [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+        .onAppear(() => this.play())
     }
   }
 }

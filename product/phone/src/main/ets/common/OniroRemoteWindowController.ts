@@ -23,10 +23,10 @@ const TAG = 'OniroRemoteWindowController';
 export const REMOTE_WINDOW_LIST_KEY = 'OniroRemoteWindowList';
 
 /**
- * One pending app-appearance. Holds the RemoteWindow target and the WMS
- * "animation finished" callback. The host component renders a `RemoteWindow`
- * for `target` (which restores the leash's context alpha → the app becomes
- * visible), then calls `finishCallback` and drops the item.
+ * One appearing app. Holds the RemoteWindow target and the WMS "animation
+ * finished" callback. The host component renders a `RemoteWindow` for `target`
+ * (which restores the leash's context alpha → the app becomes visible), plays
+ * the zoom-in, then calls `finishCallback` and drops the item.
  */
 export class RemoteWindowItem {
   key: string;
@@ -49,14 +49,20 @@ export class RemoteWindowItem {
  * Registering ANY controller makes the WMS route window transitions through it
  * (and hide the appearing app's leash, context alpha 0, until a proxy renders
  * it back). This controller:
- *  - START / app-transition: hands the appearing target to OniroRemoteWindowHost,
- *    which renders a `RemoteWindow` for it at full size/opacity (no animation) so
- *    the app shows immediately. This is the supported "render the proxy" contract
- *    a controller is expected to honour — and the hook for a future custom
- *    pop-from-icon open animation (animate the RemoteWindow instead of snapping).
- *  - MINIMIZE / CLOSE: just finish — no render, no animation. This is what
- *    suppresses the legacy WMS default app-close zoom that used to duplicate the
- *    systemui swipe-up gesture.
+ *  - START / app-transition (OPEN): hands the appearing target to
+ *    OniroRemoteWindowHost, which renders a `RemoteWindow` for it and ZOOMS IT
+ *    IN (scale + fade) to full screen. Rendering the proxy is the contract a
+ *    controller must satisfy (else the appearing app stays invisible); the
+ *    zoom-in is the launch animation. The hook for a future pop-from-icon open
+ *    is here — animate from the tapped icon's rect instead of a centered scale.
+ *  - MINIMIZE / CLOSE / SCREEN-UNLOCK: NO-OP (finish only, no render, no
+ *    animation). This removes the window without the legacy WMS default zoom
+ *    (which used to duplicate the systemui swipe-up-to-home gesture). We must
+ *    NOT render a proxy for a disappearing window: rendering the leash of a
+ *    window heading to background makes the WMS treat it as foreground again →
+ *    it re-launches, AMS re-minimizes, and it oscillates, leaving the app
+ *    invisible on reopen. A close/minimize zoom would need a snapshot, not the
+ *    live leash proxy.
  *
  * Must be registered from the EntryView page thread (see EntryView) and needs the
  * graphic_2d rs_window_animation_controller thread/napi fix. See project memory
@@ -69,7 +75,7 @@ export default class OniroRemoteWindowController
     return `${target.bundleName}#${target.abilityName}#${target.missionId}`;
   }
 
-  // Queue the appearing target for the host to render via RemoteWindow.
+  // Queue the appearing target for the host to render+zoom-in via RemoteWindow.
   private show(target: windowAnimationManager.WindowAnimationTarget,
     finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
     if (!target) {
@@ -108,14 +114,15 @@ export default class OniroRemoteWindowController
   onAppTransition(fromWindowTarget: windowAnimationManager.WindowAnimationTarget,
     toWindowTarget: windowAnimationManager.WindowAnimationTarget,
     finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
-    // Show the incoming app; the outgoing one is removed by the WMS
+    // Show (zoom in) the incoming app; the outgoing one is removed by the WMS
     // (isPlayAnimationHide) with no zoom.
     this.show(toWindowTarget, finishCallback);
   }
 
   onMinimizeWindow(minimizingWindowTarget: windowAnimationManager.WindowAnimationTarget,
     finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
-    // No-op: the window is removed without the default zoom-out.
+    // No-op: the window is removed without a zoom (see class doc — never render
+    // a proxy for a backgrounding window).
     finishCallback.onAnimationFinish();
   }
 

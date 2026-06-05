@@ -235,9 +235,9 @@ struct EntryView {
         FolderOpenComponent();
       }
 
-      // Renders RemoteWindow proxies for apps being opened (so they appear at
-      // full), while OniroRemoteWindowController no-ops the close zoom. On top
-      // of the desktop, non-interactive.
+      // Renders a RemoteWindow proxy for each appearing app and zooms it in.
+      // Close/minimize are left as no-ops (see OniroRemoteWindowController).
+      // On top of the desktop, non-interactive.
       OniroRemoteWindowHost()
     }
     .backgroundImage(StyleConstants.DEFAULT_BACKGROUND_IMAGE)
