@@ -76,6 +76,12 @@ const TAG = 'GestureNavigation_DragController';
 // snappy.
 export const COMMIT_SPRING_MS = 320;
 
+// HOME commit uses a slower, softer shrink (see DragOverlay's homeMode curve)
+// so the app visibly collapses into its icon rather than snapping away. This is
+// the settle window before the teardown gate begins; it covers the slower
+// shrink so the (gated) teardown can't cut the animation short.
+export const HOME_SPRING_MS = 450;
+
 // AppStorage keys.
 export const APP_KEY_DRAG_VISIBLE = 'OniroDragVisible';
 export const APP_KEY_DRAG_ROW_LEFT = 'OniroDragRowLeftVp';
@@ -93,6 +99,16 @@ export const APP_KEY_DRAG_RADIUS = 'OniroDragRadius';
 export const APP_KEY_DRAG_BACKDROP_ALPHA = 'OniroDragBackdropAlpha';
 export const APP_KEY_DRAG_RECENTS_MODE = 'OniroDragRecentsMode';
 export const APP_KEY_DRAG_SPACING = 'OniroDragCardSpacingVp';
+// Opacity (0..1) of the launcher home-screen snapshot backdrop, faded IN on a
+// HOME commit so the app card collapses INTO its real icon over the visible
+// home screen (AOSP-style). 0 during the drag and for RECENTS/CANCEL (those
+// keep the wallpaper+dim Overview backdrop). The PixelMap itself lives under
+// OniroDragHomeShot (captured by MainAbility at WINDOW_INACTIVE).
+export const APP_KEY_DRAG_HOME_SHOT_ALPHA = 'OniroDragHomeShotAlpha';
+// True only while a HOME commit is springing — DragOverlay reads it to pick a
+// slower, softer shrink curve (vs the drag's responsive one). False during the
+// drag and for RECENTS / CANCEL.
+export const APP_KEY_DRAG_HOME_MODE = 'OniroDragHomeMode';
 
 const MIN_SCALE = 0.45;
 const OVERVIEW_SCALE = 0.65;             // pose at RECENTS commit
@@ -221,6 +237,8 @@ export class DragController {
     AppStorage.SetOrCreate(APP_KEY_DRAG_RECENTS_ALPHA, 0);
     AppStorage.SetOrCreate(APP_KEY_DRAG_RADIUS, 0);
     AppStorage.SetOrCreate(APP_KEY_DRAG_BACKDROP_ALPHA, 1.0);
+    AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_SHOT_ALPHA, 0);
+    AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_MODE, false);
     this.writeStaticGeometry();
     // Position the row so the foreground card fills the screen
     // exactly: bottom at screen-bottom, center at screen-middle.
@@ -293,6 +311,13 @@ export class DragController {
       AppStorage.SetOrCreate(APP_KEY_DRAG_RECENTS_ALPHA, 0);
       AppStorage.SetOrCreate(APP_KEY_DRAG_RADIUS, MAX_RADIUS_VP);
       AppStorage.SetOrCreate(APP_KEY_DRAG_BACKDROP_ALPHA, 0);
+      // Fade the launcher home-screen backdrop IN as the card shrinks, so the
+      // app collapses into its icon over the visible home screen (not a blank
+      // wallpaper). The home-shot is opaque + includes the wallpaper, so once
+      // faded in it fully covers the still-present (mid-minimize) real app —
+      // the teardown gate (GestureNavHost) then hands off to the real launcher.
+      AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_SHOT_ALPHA, 1);
+      AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_MODE, true);
       const r = this.homeTargetRect;
       if (r && r.wVp > 0) {
         // Phase 3: shrink the foreground card INTO its launcher icon. The row
@@ -320,6 +345,8 @@ export class DragController {
       AppStorage.SetOrCreate(APP_KEY_DRAG_RECENTS_ALPHA, 1.0);
       AppStorage.SetOrCreate(APP_KEY_DRAG_RADIUS, MAX_RADIUS_VP);
       AppStorage.SetOrCreate(APP_KEY_DRAG_BACKDROP_ALPHA, 1.0);
+      AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_SHOT_ALPHA, 0);
+      AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_MODE, false);
       // Centered → centerY at screenH/2 → bottom at screenH/2 +
       // (cardH * scale)/2 — but we anchor on the bottom in row local
       // coords, so target the equivalent "fingerY" that places center
@@ -340,11 +367,16 @@ export class DragController {
       AppStorage.SetOrCreate(APP_KEY_DRAG_RECENTS_ALPHA, 0);
       AppStorage.SetOrCreate(APP_KEY_DRAG_RADIUS, 0);
       AppStorage.SetOrCreate(APP_KEY_DRAG_BACKDROP_ALPHA, 0);
+      AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_SHOT_ALPHA, 0);
+      AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_MODE, false);
       this.writePosition(this.screenWidthVp / 2, this.screenHeightVp);
     }
     Log.showInfo(TAG,
       `commit-spring target=${GestureEndTarget[target]} -> ` +
       `sc=${AppStorage.Get<number>(APP_KEY_DRAG_SCALE)?.toFixed(2)}`);
+    // HOME uses the longer settle so the slower shrink finishes before the
+    // teardown gate starts; RECENTS/CANCEL keep the snappy settle.
+    const settleMs = target === GestureEndTarget.HOME ? HOME_SPRING_MS : COMMIT_SPRING_MS;
     setTimeout(() => {
       if (target === GestureEndTarget.RECENTS) {
         // The overlay stays up and the user can interact with it.
@@ -352,7 +384,7 @@ export class DragController {
         AppStorage.SetOrCreate(APP_KEY_DRAG_RECENTS_MODE, true);
       }
       onComplete();
-    }, COMMIT_SPRING_MS);
+    }, settleMs);
   }
 
   /**
@@ -366,6 +398,8 @@ export class DragController {
     AppStorage.SetOrCreate(APP_KEY_DRAG_RECENTS_ALPHA, 0);
     AppStorage.SetOrCreate(APP_KEY_DRAG_RADIUS, 0);
     AppStorage.SetOrCreate(APP_KEY_DRAG_BACKDROP_ALPHA, 0);
+    AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_SHOT_ALPHA, 0);
+    AppStorage.SetOrCreate(APP_KEY_DRAG_HOME_MODE, false);
   }
 
   // ---- Internal --------------------------------------------------------

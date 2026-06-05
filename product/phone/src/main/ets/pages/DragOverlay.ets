@@ -38,6 +38,7 @@
  *   paints before the snapshot Image is up and covering the screen):
  *     1. Wallpaper Image            (PixelMap from @ohos.wallpaper)
  *     2. Dim Column                 (alpha = backdropAlpha * 0.4)
+ *     2b. Home-screen snapshot      (HOME commit only; alpha = homeShotAlpha)
  *     3. Backdrop tap-zone          (only in recents-mode)
  *     4. Row of cards (wrapped)     (transformed; wrapper handles pan)
  *
@@ -68,6 +69,11 @@ struct DragOverlay {
   @StorageLink('OniroDragVisible') @Watch('onVisibleChange') visible: boolean = false;
   @StorageLink('OniroDragSnap') snap: image.PixelMap | null = null;
   @StorageLink('OniroDragWallpaper') wallpaper: image.PixelMap | null = null;
+  // Launcher home-screen snapshot, faded in as the HOME-commit backdrop so the
+  // app collapses into its real icon over the visible home screen. Captured by
+  // MainAbility at WINDOW_INACTIVE; null ⇒ the layer doesn't paint (wallpaper+
+  // dim fallback).
+  @StorageLink('OniroDragHomeShot') homeShot: image.PixelMap | null = null;
   @StorageLink('OniroDragRecents') recents: RecentsCardData[] = [];
   // Mission id of the foreground app shown by the live snapshot card.
   // -1 ⇒ launcher/systemui foreground (no × offered). Set by RecentsLoader.
@@ -92,6 +98,10 @@ struct DragOverlay {
   @StorageLink('OniroDragRecentsAlpha') recentsAl: number = 0;
   @StorageLink('OniroDragRadius') rad: number = 0;
   @StorageLink('OniroDragBackdropAlpha') backdropAlpha: number = 0;
+  @StorageLink('OniroDragHomeShotAlpha') homeShotAlpha: number = 0;
+  // True only while a HOME commit is springing → use a slower, softer shrink
+  // curve so the app visibly collapses into its icon instead of snapping away.
+  @StorageLink('OniroDragHomeMode') homeMode: boolean = false;
   @StorageLink('OniroDragRecentsMode') @Watch('onRecentsModeChange') recentsMode: boolean = false;
 
   // Pan-scroll state. Local @State so the wrapper Column's translate
@@ -301,6 +311,27 @@ struct DragOverlay {
         .opacity(this.visible && this.snap ? this.backdropAlpha * this.maxDim : 0)
         .animation({ curve: curves.springMotion(0.34, 0.82) });
 
+      // 2b. Launcher home-screen snapshot backdrop. Faded in on a HOME commit
+      // (homeShotAlpha 0→1) so the shrinking app card collapses INTO its real
+      // icon over the visible home screen, and so the still-present
+      // mid-minimize app is never revealed before the real launcher arrives
+      // (GestureNavHost gates teardown on that). Opaque + includes the same
+      // wallpaper, so once faded in it covers everything below it. Kept mounted
+      // at opacity 0 during the drag (like the dim layer) so the .animation()
+      // fade actually runs on commit instead of snapping. expandSafeArea maps
+      // it 1:1 to the display so it aligns pixel-exact with the real launcher
+      // at handoff. Gated on homeShot ⇒ a no-op when capture failed (the
+      // wallpaper+dim fallback below still works). 0 for RECENTS/CANCEL.
+      if (this.visible && this.snap && this.homeShot) {
+        Image(this.homeShot)
+          .width('100%').height('100%')
+          .objectFit(ImageFit.Cover)
+          .opacity(this.homeShotAlpha)
+          .animation({ curve: curves.springMotion(0.34, 0.82) })
+          .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
+            [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END]);
+      }
+
       // 3. Tap-to-dismiss zone — only present in recents mode so a
       // mid-drag tap (which can't reach here anyway because the
       // window is non-touchable) can't accidentally dismiss.
@@ -400,7 +431,9 @@ struct DragOverlay {
             .width(this.cardWidthVp)
             .height(this.cardHeightVp)
             .opacity(this.al)
-            .animation({ curve: curves.springMotion(0.34, 0.82) });
+            .animation({ curve: this.homeMode
+              ? curves.springMotion(0.5, 0.9)
+              : curves.springMotion(0.34, 0.82) });
             }
           }
           .width(this.rowWidthVp)
@@ -412,7 +445,9 @@ struct DragOverlay {
             centerX: this.anchorXVp,
             centerY: this.anchorYVp,
           })
-          .animation({ curve: curves.springMotion(0.34, 0.82) });
+          .animation({ curve: this.homeMode
+            ? curves.springMotion(0.5, 0.9)
+            : curves.springMotion(0.34, 0.82) });
         }
         .width('100%').height('100%')
         .translate({ x: this.scrollOffsetVp, y: 0 });

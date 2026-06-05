@@ -133,6 +133,23 @@ export class GestureNavHost {
   // drag overlay is "live" as the Overview surface.
   private inRecentsMode = false;
 
+  // HOME-teardown gate (fixes the "app reappears" flicker). The WMS minimize/
+  // launcher-appear is gated on an intermittent ~0.85-1.2s vsync stall on this
+  // build AND churns the desktop active/inactive a few times before it settles,
+  // so tearing the overlay down on a fixed timer (or the first WINDOW_ACTIVE)
+  // can expose the still-transitioning app. Instead we hold the (opaque home-
+  // shot) overlay until the desktop is STABLY foreground AND the window-anim
+  // controller has no pending OPEN proxy (a just-opened app's zoom-in proxy
+  // would otherwise render that app in EntryView right behind the overlay — the
+  // immediate open-then-home reappear). realDesktopForeground is the desktop's
+  // CURRENT foreground state, pushed live from MainAbility's WINDOW_ACTIVE/
+  // INACTIVE (NOT a latch, and NOT the optimistic flag goHome() sets), so a
+  // transient "active" blip during the churn doesn't trigger an early teardown.
+  // gestureGen bumps on every new gesture so a pending wait abandons itself if
+  // a fresh swipe supersedes it.
+  private realDesktopForeground = true;
+  private gestureGen = 0;
+
   private navMode: string = '1';
   private navListener = null;
 
@@ -197,9 +214,28 @@ export class GestureNavHost {
     }
   }
 
+  /**
+   * The desktop window became foreground / background — pushed live from
+   * MainAbility's WINDOW_ACTIVE / WINDOW_INACTIVE. Drives the HOME-teardown
+   * gate's CURRENT-state check (realDesktopForeground): the overlay only tears
+   * down once the desktop reads stably foreground, so a transient blip during
+   * the go-home churn can't expose the still-transitioning app. Distinct from
+   * the optimistic foregroundIsLauncher flag goHome() sets synchronously.
+   */
+  onDesktopBecameForeground(): void {
+    this.realDesktopForeground = true;
+  }
+
+  onDesktopBecameBackground(): void {
+    this.realDesktopForeground = false;
+  }
+
   // ---- Recognizer wiring ------------------------------------------------
 
   private resetOverlayForGesture(): void {
+    // A new gesture is taking over — abandon any pending HOME-teardown wait
+    // from a prior commit (the overlay state belongs to this gesture now).
+    this.gestureGen++;
     if (this.dragWindow && (this.inRecentsMode || this.dragShown)) {
       this.dragWindow.setWindowFocusable(false).catch((e) => {
         Log.showWarn(TAG, `pre-gesture setFocusable failed: ${JSON.stringify(e)}`);
@@ -433,13 +469,20 @@ export class GestureNavHost {
     // so the system's launcher-appear runs underneath our overlay. Hand the
     // outgoing app's icon rect to the controller first so the shrink lands ON
     // that icon (Phase 3); null ⇒ controller's bottom-centre fallback.
+    let homeGen = 0;
     if (target === GestureEndTarget.HOME) {
       this.dragController.setHomeTargetRect(this.computeHomeIconRect());
+      // Hold the overlay (home-shot covering) until the launcher is STABLY
+      // foreground AND no open proxy lingers — see teardownHomeWhenLauncherReady
+      // — so the still-transitioning / just-opened app is never exposed.
+      homeGen = this.gestureGen;
       this.goHome();
     }
     this.dragController.commit(target, () => {
       if (target === GestureEndTarget.RECENTS) {
         this.enterRecentsMode();
+      } else if (target === GestureEndTarget.HOME) {
+        this.teardownHomeWhenLauncherReady(teardown, homeGen);
       } else {
         teardown();
       }
@@ -481,6 +524,70 @@ export class GestureNavHost {
       setTimeout(check, 80);
     };
     setTimeout(check, 80);
+  }
+
+  /**
+   * Hold the HOME overlay (opaque, home-shot backdrop) after the shrink spring
+   * until the desktop is stably foreground AND the open-proxy list is clear,
+   * THEN teardown — so the just-opened / still-transitioning app isn't exposed.
+   * 48ms poll; MAX_WAIT_MS safety cap so a missed/late WINDOW_ACTIVE can't hang
+   * us. Bails without tearing down if a newer gesture has superseded this commit
+   * (gestureGen changed) — that gesture's start()/reset() owns the overlay now.
+   */
+  private teardownHomeWhenLauncherReady(teardown: () => void, gen: number): void {
+    const startMs = Date.now();
+    // Pure safety backstop — the gate below (stable launcher-foreground + no
+    // pending open proxy) is the real mechanism and resolves well within this in
+    // normal use. It only bounds a pathological transition where the desktop
+    // never settles foreground, so the full-screen home-shot overlay can't get
+    // stuck. (A fresh swipe also self-heals via gestureGen.)
+    //
+    // NOTE: this gate intentionally does NOT wait out the WMS leash-removal
+    // stall, so on an immediate open-then-home the outgoing app's leash can
+    // still flash briefly after teardown (the "app reappears" flicker). A fixed
+    // cover hid it but felt laggy and was reverted — the real fix is the
+    // underlying minimize/launcher-appear vsync stall, not an overlay-side cover.
+    const MAX_WAIT_MS = 2500;
+    // Require the desktop to read foreground for a few consecutive polls so a
+    // transient "active" blip during the go-home churn doesn't trigger an early
+    // teardown (which would expose the still-transitioning app).
+    const STABLE_POLLS = 3;
+    let stable = 0;
+    const tick = (): void => {
+      if (this.gestureGen !== gen) {
+        Log.showInfo(TAG, 'home teardown wait superseded by a new gesture');
+        return;
+      }
+      stable = this.realDesktopForeground ? stable + 1 : 0;
+      const proxyClear = this.remoteWindowListEmpty();
+      const settled = stable >= STABLE_POLLS && proxyClear;
+      const timedOut = Date.now() - startMs > MAX_WAIT_MS;
+      if (settled || timedOut) {
+        Log.showInfo(TAG,
+          `home teardown (settled=${settled} fg=${this.realDesktopForeground} ` +
+          `proxyClear=${proxyClear} waited=${Date.now() - startMs}ms` +
+          (timedOut ? ' [SAFETY-CAP]' : '') + ')');
+        teardown();
+        return;
+      }
+      setTimeout(tick, 48);
+    };
+    tick();
+  }
+
+  /**
+   * True when the launcher's window-animation controller has no pending OPEN
+   * proxy. The controller (common/OniroRemoteWindowController) renders a
+   * RemoteWindow proxy for each just-opened app in EntryView and drops it
+   * ~450ms after the open finishes. If we tear the home-shot overlay down while
+   * one is still pending (the immediate open-then-home case), that proxy —
+   * rendering the app in the launcher window right behind the overlay — is what
+   * "reappears". So the gate waits for the list to clear. Reads the controller's
+   * shared process-local AppStorage list (key OniroRemoteWindowList).
+   */
+  private remoteWindowListEmpty(): boolean {
+    const list = AppStorage.get<object[]>('OniroRemoteWindowList');
+    return !list || list.length === 0;
   }
 
   /**

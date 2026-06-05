@@ -41,6 +41,7 @@ import window from '@ohos.window';
 import commonEventManager from '@ohos.commonEventManager';
 import { PreferencesHelper } from '@ohos/common/src/main/ets/default/manager/PreferencesHelper';
 import { GestureNavHost } from '../gesturenav/GestureNavHost';
+import image from '@ohos.multimedia.image';
 
 // Published whenever the desktop window gains/loses focus, so systemui's
 // side-edge BACK gesture can suppress itself on the home screen WITHOUT a
@@ -59,6 +60,11 @@ export default class MainAbility extends ServiceExtension {
   // app icon rect, which only the launcher knows. The side-edge BACK gesture
   // stays in systemui. See the migration plan.
   private gestureNavHost: GestureNavHost | undefined = undefined
+  // Cached launcher home-screen snapshot, refreshed each time the desktop goes
+  // to background (the freshest reliable frame). Published to AppStorage
+  // (OniroDragHomeShot) for the swipe-to-home animation, which fades it in as
+  // the backdrop the app card collapses into. See DragOverlay / GestureNavHost.
+  private homeShot: image.PixelMap | null = null
 
   onCreate(want: Want): void {
     Log.showInfo(TAG,'onCreate start');
@@ -89,12 +95,23 @@ export default class MainAbility extends ServiceExtension {
           // swipe-from-launcher → recents-only). Replaces a getTopAbility
           // sync binder / abilityForegroundState observer.
           this.gestureNavHost?.setForegroundIsLauncher(true);
+          // Real "launcher is now foreground" signal — gates the swipe-to-home
+          // teardown so the overlay never drops while the outgoing app is still
+          // composited (the "app reappears" flicker). Distinct from the
+          // optimistic flag goHome() sets synchronously.
+          this.gestureNavHost?.onDesktopBecameForeground();
           // …and to systemui (BACK suppression on home) via CommonEvent. Runs
           // regardless of the gesture owner — back stays in systemui either way.
           this.publishDesktopFocus(true);
         } else if (stageEventType === window.WindowEventType.WINDOW_INACTIVE) {
           this.gestureNavHost?.setForegroundIsLauncher(false);
+          // Live "desktop is no longer foreground" signal for the swipe-to-home
+          // teardown gate (current-state, used to ride out the go-home churn).
+          this.gestureNavHost?.onDesktopBecameBackground();
           this.publishDesktopFocus(false);
+          // Grab a fresh home-screen snapshot now, while the desktop window
+          // still holds its last rendered frame, for the swipe-to-home backdrop.
+          this.captureHomeShot(win);
         }
       })
     };
@@ -168,6 +185,36 @@ export default class MainAbility extends ServiceExtension {
       });
     } catch (e) {
       Log.showWarn(TAG, `publishDesktopFocus(${focused}) threw: ${JSON.stringify(e)}`);
+    }
+  }
+
+  /**
+   * Capture the launcher home screen into a PixelMap and publish it for the
+   * swipe-to-home backdrop (DragOverlay reads OniroDragHomeShot via @StorageLink).
+   * window.snapshot() captures the desktop window's OWN surface — wallpaper +
+   * icons + dock, NOT the incoming app (a separate window) — so it's exactly the
+   * home screen the user returns to. Taken at WINDOW_INACTIVE, the freshest
+   * reliable frame (the window still holds its last render before it's occluded).
+   * Best-effort: on failure the backdrop layer simply doesn't paint and the
+   * gesture falls back to the wallpaper+dim look. Releases the previous capture.
+   */
+  private async captureHomeShot(win: window.Window): Promise<void> {
+    // Don't overwrite the home-shot while the swipe-to-home overlay is showing
+    // it: the go-home minimize churns the desktop active/inactive, and a
+    // spurious WINDOW_INACTIVE mid-gesture would otherwise replace the displayed
+    // backdrop with a half-rendered transition frame.
+    if (AppStorage.get<boolean>('OniroDragVisible') === true) {
+      return;
+    }
+    try {
+      const pm: image.PixelMap = await win.snapshot();
+      const prev = this.homeShot;
+      this.homeShot = pm;
+      AppStorage.setOrCreate('OniroDragHomeShot', pm);
+      prev?.release().catch(() => {});
+      Log.showDebug(TAG, 'captureHomeShot ok');
+    } catch (e) {
+      Log.showWarn(TAG, `captureHomeShot failed: ${JSON.stringify(e)}`);
     }
   }
 
