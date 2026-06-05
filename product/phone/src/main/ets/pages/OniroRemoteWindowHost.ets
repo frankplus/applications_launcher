@@ -29,6 +29,20 @@ const OPEN_ALPHA_MS: number = 180;
 const OPEN_SPRING_RESPONSE: number = 0.4;
 const OPEN_SPRING_DAMPING: number = 0.99;
 
+// Pop-from-icon open (app launched from a desktop/dock icon — item.iconRect
+// set): the window starts at the tapped icon's rect (a small square at the
+// icon, non-uniform scale + translate so its center sits on the icon center)
+// and springs out to fill the display. No fade — the window is opaque from the
+// first frame and visibly grows out of the icon, with its corners rounded like
+// the icon and squaring off as it fills the screen. A slightly snappier spring
+// than the centered zoom so the pop feels responsive.
+const ICON_SPRING_RESPONSE: number = 0.34;
+const ICON_SPRING_DAMPING: number = 0.99;
+// Pre-scale corner radius (vp). Multiplied by the (small) start scale, this
+// reads as an icon-sized rounded corner at the start and animates to a square
+// full-screen window. ~90 vp × (icon/screen ≈ 0.15) ≈ 13 vp visible corner.
+const ICON_START_RADIUS: number = 90;
+
 // After the zoom-in finishes we tell the WMS the show is done (the real window
 // then composites on its own); drop the proxy a beat later so the handoff has
 // no one-frame gap.
@@ -70,17 +84,46 @@ struct OniroRemoteWindowCard {
   // Plain (non-reactive) member: passed by reference, rendered once.
   item: RemoteWindowItem = new RemoteWindowItem('');
   // Animated render transforms on top of the proxy's 1:1 full-display layout.
-  @State scaleVal: number = OPEN_START_SCALE;
+  // Scale is non-uniform (X/Y separate) so a launch can start as the icon's
+  // square at the icon rect (icon/screenW ≠ icon/screenH) and stretch to fill.
+  // The centered fallback sets both axes equal.
+  @State scaleXVal: number = OPEN_START_SCALE;
+  @State scaleYVal: number = OPEN_START_SCALE;
   @State opacityVal: number = 0.0;
-  // Reserved for the future pop-from-icon open: animate translate from the
-  // tapped icon's offset (with .scale center at the icon) instead of a centered
-  // zoom. Kept at 0 for the basic centered zoom.
+  // .scale() is about the component centre; .translate() (absolute vp) then
+  // moves that centre. For pop-from-icon the start translate places the
+  // shrunk window's centre on the tapped icon's centre.
   @State translateX: number = 0;
   @State translateY: number = 0;
+  // Corner radius (vp), animated to 0. Non-zero only for the pop-from-icon open.
+  @State radiusVal: number = 0;
+  // True when the start pose was derived from item.iconRect (pop-from-icon).
+  private fromIcon: boolean = false;
   private played: boolean = false;
   private done: boolean = false;
 
   aboutToAppear(): void {
+    // Derive the pop-from-icon start pose before the first build (aboutToAppear
+    // runs before build, so these @State writes are picked up by frame 1 — no
+    // snap). Maps the icon rect (vp) onto the RemoteWindow, which the host lays
+    // out 1:1 over the full display at (0,0): the window centre is (screenW/2,
+    // screenH/2) in vp, so translate = iconCentre − screenCentre and scale =
+    // iconSize / screenSize. Mirrors the stock RemoteWindowWrapper math.
+    const t = this.item.target;
+    const r = this.item.iconRect;
+    if (t && r && t.windowBounds) {
+      const screenWvp: number = px2vp(t.windowBounds.width);
+      const screenHvp: number = px2vp(t.windowBounds.height);
+      if (screenWvp > 0 && screenHvp > 0) {
+        this.scaleXVal = r.wVp / screenWvp;
+        this.scaleYVal = r.hVp / screenHvp;
+        this.translateX = (r.xVp + r.wVp / 2) - screenWvp / 2;
+        this.translateY = (r.yVp + r.hVp / 2) - screenHvp / 2;
+        this.opacityVal = 1.0;          // opaque, grows out of the icon — no fade
+        this.radiusVal = ICON_START_RADIUS;
+        this.fromIcon = true;
+      }
+    }
     // Backup play trigger + a finish fallback so we never leave the WMS hanging.
     setTimeout(() => this.play(), PLAY_BACKUP_MS);
     setTimeout(() => this.finishAndDrop(), FALLBACK_MS);
@@ -93,17 +136,25 @@ struct OniroRemoteWindowCard {
       return;
     }
     this.played = true;
-    animateTo({ duration: OPEN_ALPHA_MS, curve: Curve.Friction }, () => {
-      this.opacityVal = 1.0;
-    });
+    // Centered zoom fades in (it starts shrunk-but-centered, so a ghost would
+    // show mid-zoom); the icon pop is already opaque from frame 1.
+    if (!this.fromIcon) {
+      animateTo({ duration: OPEN_ALPHA_MS, curve: Curve.Friction }, () => {
+        this.opacityVal = 1.0;
+      });
+    }
     // springMotion inlined at the call site (storing it in a typed field breaks
     // ArkTS type inference for the curve param); response/damping are tunable
     // consts above.
-    animateTo({ curve: curves.springMotion(OPEN_SPRING_RESPONSE, OPEN_SPRING_DAMPING, 0),
+    const response: number = this.fromIcon ? ICON_SPRING_RESPONSE : OPEN_SPRING_RESPONSE;
+    const damping: number = this.fromIcon ? ICON_SPRING_DAMPING : OPEN_SPRING_DAMPING;
+    animateTo({ curve: curves.springMotion(response, damping, 0),
       onFinish: () => this.finishAndDrop() }, () => {
-      this.scaleVal = 1.0;
+      this.scaleXVal = 1.0;
+      this.scaleYVal = 1.0;
       this.translateX = 0;
       this.translateY = 0;
+      this.radiusVal = 0;
     });
   }
 
@@ -139,9 +190,10 @@ struct OniroRemoteWindowCard {
         .position({ x: 0, y: 0 })
         .width('100%')
         .height('100%')
-        .scale({ x: this.scaleVal, y: this.scaleVal })
+        .scale({ x: this.scaleXVal, y: this.scaleYVal })
         .translate({ x: this.translateX, y: this.translateY })
         .opacity(this.opacityVal)
+        .borderRadius(this.radiusVal)
         .expandSafeArea([SafeAreaType.SYSTEM, SafeAreaType.CUTOUT],
           [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
         .onAppear(() => this.play())

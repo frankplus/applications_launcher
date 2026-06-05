@@ -15,12 +15,40 @@
  */
 
 import windowAnimationManager from '@ohos.animation.windowAnimationManager';
-import { Log } from '@ohos/common';
+import { Log, CommonConstants } from '@ohos/common';
 
 const TAG = 'OniroRemoteWindowController';
 
 // AppStorage key shared with OniroRemoteWindowHost (rendered in EntryView).
 export const REMOTE_WINDOW_LIST_KEY = 'OniroRemoteWindowList';
+
+/**
+ * The on-screen rect (vp) of the launcher icon an opening app should pop out
+ * of. All in the launcher window's display-vp coordinate space (origin top-
+ * left of the display), the same space OniroRemoteWindowHost renders the
+ * RemoteWindow in. wVp/hVp differ only for form cards (a card's icon is a
+ * rectangle); for a normal app icon wVp === hVp === appIconSize.
+ */
+export interface OniroIconRect {
+  xVp: number;
+  yVp: number;
+  wVp: number;
+  hVp: number;
+}
+
+// Shapes of the two AppStorage records the launcher writes at app-launch tap
+// time (AppItem.setStartAppInfo → PageDesktopStartAppHandler). Read here to
+// pop the opening window out of the tapped icon. Lite views — only the fields
+// this controller needs.
+interface StartAppItemInfoLite {
+  bundleName?: string;
+}
+interface StartAppIconInfoLite {
+  appIconSize?: number;
+  appIconHeight?: number;
+  appIconPositionX?: number;
+  appIconPositionY?: number;
+}
 
 /**
  * One appearing app. Holds the RemoteWindow target and the WMS "animation
@@ -34,12 +62,18 @@ export class RemoteWindowItem {
   // component's default member init; real items always carry both.
   target?: windowAnimationManager.WindowAnimationTarget;
   finishCallback?: windowAnimationManager.WindowAnimationFinishedCallback;
+  // When set (app launched from a desktop/dock icon), the host pops the window
+  // OUT of this icon rect instead of a centered 0.9→1.0 zoom. Undefined for
+  // recent/other launches → centered fallback.
+  iconRect?: OniroIconRect;
 
   constructor(key: string, target?: windowAnimationManager.WindowAnimationTarget,
-    finishCallback?: windowAnimationManager.WindowAnimationFinishedCallback) {
+    finishCallback?: windowAnimationManager.WindowAnimationFinishedCallback,
+    iconRect?: OniroIconRect) {
     this.key = key;
     this.target = target;
     this.finishCallback = finishCallback;
+    this.iconRect = iconRect;
   }
 }
 
@@ -75,9 +109,49 @@ export default class OniroRemoteWindowController
     return `${target.bundleName}#${target.abilityName}#${target.missionId}`;
   }
 
+  /**
+   * Reverse-look-up the tapped icon rect for an app that's launching from the
+   * launcher. The launcher writes `startAppItemInfo` (carries the bundle) and
+   * `startAppIconInfo` (the icon rect in vp) at tap time
+   * (AppItem.setStartAppInfo → PageDesktopStartAppHandler). We only honour it
+   * when the stashed bundle matches the appearing target — so a launch from a
+   * notification / other source (which doesn't refresh the stash) falls back
+   * to the centered zoom rather than popping out of a stale, unrelated icon.
+   */
+  private iconRectFor(target: windowAnimationManager.WindowAnimationTarget): OniroIconRect | undefined {
+    const itemInfo: StartAppItemInfoLite | undefined =
+      AppStorage.get<StartAppItemInfoLite>('startAppItemInfo');
+    const iconInfo: StartAppIconInfoLite | undefined =
+      AppStorage.get<StartAppIconInfoLite>('startAppIconInfo');
+    if (!itemInfo || !iconInfo) {
+      return undefined;
+    }
+    if (itemInfo.bundleName !== target.bundleName) {
+      return undefined;
+    }
+    const size: number = iconInfo.appIconSize ?? 0;
+    if (size <= 0) {
+      return undefined;
+    }
+    const typeFromDesktop: number = AppStorage.get<number>('startAppTypeFromPageDesktop') ?? 0;
+    const isCard: boolean = typeFromDesktop === CommonConstants.OVERLAY_TYPE_CARD;
+    let h: number = size;
+    if (isCard && iconInfo.appIconHeight !== undefined && iconInfo.appIconHeight > 0) {
+      h = iconInfo.appIconHeight;
+    }
+    return {
+      xVp: iconInfo.appIconPositionX ?? 0,
+      yVp: iconInfo.appIconPositionY ?? 0,
+      wVp: size,
+      hVp: h,
+    };
+  }
+
   // Queue the appearing target for the host to render+zoom-in via RemoteWindow.
+  // iconRect (when present) makes the host pop the window out of that icon.
   private show(target: windowAnimationManager.WindowAnimationTarget,
-    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
+    finishCallback: windowAnimationManager.WindowAnimationFinishedCallback,
+    iconRect?: OniroIconRect): void {
     if (!target) {
       finishCallback.onAnimationFinish();
       return;
@@ -91,14 +165,14 @@ export default class OniroRemoteWindowController
       return;
     }
     const next: RemoteWindowItem[] = list.slice();
-    next.push(new RemoteWindowItem(key, target, finishCallback));
+    next.push(new RemoteWindowItem(key, target, finishCallback, iconRect));
     AppStorage.setOrCreate(REMOTE_WINDOW_LIST_KEY, next);
-    Log.showInfo(TAG, `show ${key} (pending=${next.length})`);
+    Log.showInfo(TAG, `show ${key} (pending=${next.length}) iconRect=${iconRect ? JSON.stringify(iconRect) : 'none'}`);
   }
 
   onStartAppFromLauncher(startingWindowTarget: windowAnimationManager.WindowAnimationTarget,
     finishCallback: windowAnimationManager.WindowAnimationFinishedCallback): void {
-    this.show(startingWindowTarget, finishCallback);
+    this.show(startingWindowTarget, finishCallback, this.iconRectFor(startingWindowTarget));
   }
 
   onStartAppFromRecent(startingWindowTarget: windowAnimationManager.WindowAnimationTarget,

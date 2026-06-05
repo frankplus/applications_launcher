@@ -76,6 +76,12 @@
       },
       {
         "name": "ohos.permission.GET_WALLPAPER"
+      },
+      {
+        "name": "ohos.permission.CAPTURE_SCREEN"
+      },
+      {
+        "name": "ohos.permission.COMMONEVENT_STICKY"
       }
     ]
   }

@@ -5,6 +5,7 @@
     "pages/EmptyPage",
     "pages/EntryView",
     "pages/RecentView",
-    "pages/SubDisplayWallpaperPage"
+    "pages/SubDisplayWallpaperPage",
+    "pages/DragOverlay"
   ]
 }
