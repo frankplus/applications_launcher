@@ -37,6 +37,9 @@ import { SmartDockStyleConfig } from '@ohos/smartdock';
 import display from '@ohos.display';
 import systemParameter from '@ohos.systemparameter';
 import image from '@ohos.multimedia.image';
+import windowAnimationManager from '@ohos.animation.windowAnimationManager';
+import { OniroRemoteWindowController } from '@ohos/gesturenavigation';
+import { OniroRemoteWindowHost } from '@ohos/gesturenavigation/component';
 
 const RAW_IMAGE_CACHE_SIZE = 20000000;
 const TAG = 'EntryView';
@@ -63,6 +66,12 @@ struct EntryView {
   @State dockHeight: number = 0;
   private mStage: PadStage = new PadStage();
   private navigationBarStatus: string | undefined;
+  // Claims the WMS remote-animation slot: renders the appearing app via a
+  // RemoteWindow (so apps open) and no-ops minimize/close (so the default
+  // app-close zoom never plays). For the swipe-up-to-home gesture this removes
+  // the duplicate WMS close zoom that played on top of our own shrink-to-icon
+  // animation. Registration is param-gated (see registerWindowAnimationController).
+  private animationController: OniroRemoteWindowController = new OniroRemoteWindowController();
   private mOrientationListener = mediaquery.matchMediaSync('(orientation: landscape)');
   @StorageLink('IsSetImageRawDataCacheSize') isSetImageRawDataCacheSize?: boolean = undefined;
   async onPortrait(mediaQueryResult: mediaquery.MediaQueryResult) {
@@ -94,6 +103,34 @@ struct EntryView {
     this.updateScreenSize();
     this.mOrientationListener.on('change', this.onPortrait);
     this.registerPageDesktopNavigatorStatusChangeEvent(this.mLocalEventListener);
+
+    this.registerWindowAnimationController();
+  }
+
+  // Register from the EntryView page (the launcher window's ArkUI thread),
+  // NOT from MainAbility.onCreate: that's a ServiceExtensionAbility, and the
+  // RS controller's callbacks are dispatched on the main event runner — so
+  // an off-thread registration crashes in libace_napi at onScreenUnlock.
+  //
+  // Gated behind a param because the RS window-animation controller itself
+  // has a thread-safety bug: `thread_local jsController_` in
+  // rs_window_animation_controller.cpp is set on this (registering) thread
+  // but the callbacks are posted to GetMainEventRunner(), so jsController_/
+  // env_ are cross-thread and the FIRST onScreenUnlock SIGBUSes in
+  // libace_napi.z.so+0x91728 — crash-looping the launcher. Enable ONLY on an
+  // image that carries the graphic_2d fix (jsController_ as a class member +
+  // napi_send_event dispatch):  param set persist.oniro.winanim_controller 1
+  private registerWindowAnimationController(): void {
+    if (systemParameter.getSync('persist.oniro.winanim_controller', '0') !== '1') {
+      Log.showInfo(TAG, 'window animation controller disabled by param');
+      return;
+    }
+    try {
+      windowAnimationManager.setController(this.animationController);
+      Log.showInfo(TAG, 'no-op window animation controller registered');
+    } catch (err) {
+      Log.showError(TAG, `setController failed: ${JSON.stringify(err)}`);
+    }
   }
 
   registerPageDesktopNavigatorStatusChangeEvent(listener: LocalEventListener): void {
@@ -138,6 +175,10 @@ struct EntryView {
     }
     try {
       systemParameter.setSync('bootevent.launcher.ready', 'true');
+      // Desktop's first frame is up → let MainAbility's deferred GestureNavHost
+      // start (it polls this flag, then waits an 800ms grace). Starting the host
+      // before the desktop is shown collapses the async grid build. Idempotent.
+      AppStorage.setOrCreate('loaded', true);
     } catch (err) {
       Log.showError(TAG, `set bootevent.launcher.ready err, ${JSON.stringify(err)}`);
     }
@@ -251,6 +292,12 @@ struct EntryView {
       if ((AppStorage.get<number>('openFolderStatus') as number) !== BigFolderConstants.OPEN_FOLDER_STATUS_CLOSE) {
         FolderOpenComponent();
       }
+
+      // Renders a RemoteWindow proxy for each appearing app and zooms it in.
+      // Close/minimize are left as no-ops (see OniroRemoteWindowController).
+      // On top of the desktop, non-interactive. Dormant unless the winanim
+      // controller is registered (persist.oniro.winanim_controller=1).
+      OniroRemoteWindowHost()
     }
     .backgroundImage(StyleConstants.DEFAULT_BACKGROUND_IMAGE)
     .backgroundImageSize(ImageSize.Cover)
