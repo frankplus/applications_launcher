@@ -40,7 +40,7 @@ import { KeyCode } from '@ohos.multimodalInput.keyCode';
 import window from '@ohos.window';
 import commonEventManager from '@ohos.commonEventManager';
 import { PreferencesHelper } from '@ohos/common/src/main/ets/default/manager/PreferencesHelper';
-import { GestureNavHost } from '../gesturenav/GestureNavHost';
+import { GestureNavHost } from '@ohos/gesturenavigation';
 import image from '@ohos.multimedia.image';
 
 // Published whenever the desktop window gains/loses focus, so systemui's

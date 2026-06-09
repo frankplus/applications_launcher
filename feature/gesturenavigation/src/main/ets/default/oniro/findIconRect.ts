@@ -21,7 +21,7 @@
 
 import { Log, PageDesktopModel, CommonConstants } from '@ohos/common';
 import { PageDesktopViewModel } from '@ohos/pagedesktop';
-import { OniroIconRect } from '../common/OniroRemoteWindowController';
+import { OniroIconRect } from './OniroRemoteWindowController';
 
 const TAG = 'findIconRect';
 

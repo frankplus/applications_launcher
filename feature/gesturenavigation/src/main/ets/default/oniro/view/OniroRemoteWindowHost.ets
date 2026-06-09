@@ -16,7 +16,7 @@
 
 import curves from '@ohos.curves';
 import { Log } from '@ohos/common';
-import { RemoteWindowItem, REMOTE_WINDOW_LIST_KEY } from '../common/OniroRemoteWindowController';
+import { RemoteWindowItem, REMOTE_WINDOW_LIST_KEY } from '../OniroRemoteWindowController';
 
 const TAG = 'OniroRemoteWindowHost';
 

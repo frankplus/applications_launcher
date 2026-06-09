@@ -13,11 +13,9 @@
  * limitations under the License.
  */
 
-export { GestureNavigationManager } from './src/main/ets/default/common/GestureNavigationManager'
-
-// Oniro launcher-owned gesture navigation (bottom-edge swipe-up HOME / RECENTS /
-// Overview + swipe-to-home shrink + app-open remote-window). Shared by all
-// product entries (product/phone, product/pad) so the gesture logic lives once.
-// The side-edge BACK gesture is NOT here — it stays in systemui.
-export { GestureNavHost } from './src/main/ets/default/oniro/GestureNavHost'
-export { default as OniroRemoteWindowController } from './src/main/ets/default/oniro/OniroRemoteWindowController'
+// ArkUI components for the Oniro launcher gesture navigation, shared by every
+// product entry. DragOverlay is hosted by a thin per-product `pages/DragOverlay`
+// @Entry shell (the gesture-overlay window's content); OniroRemoteWindowHost is
+// mounted inside each product's EntryView.
+export { DragOverlay } from './src/main/ets/default/oniro/view/DragOverlay';
+export { OniroRemoteWindowHost } from './src/main/ets/default/oniro/view/OniroRemoteWindowHost';

@@ -33,8 +33,8 @@ import { FormStyleConfig } from '@ohos/form';
 import systemParameter from '@ohos.systemparameter';
 import image from '@ohos.multimedia.image';
 import windowAnimationManager from '@ohos.animation.windowAnimationManager';
-import OniroRemoteWindowController from '../common/OniroRemoteWindowController';
-import { OniroRemoteWindowHost } from './OniroRemoteWindowHost';
+import { OniroRemoteWindowController } from '@ohos/gesturenavigation';
+import { OniroRemoteWindowHost } from '@ohos/gesturenavigation/component';
 
 const TAG = 'EntryView';
 

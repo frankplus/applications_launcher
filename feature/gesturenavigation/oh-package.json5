@@ -5,6 +5,7 @@
   "main": "index.ts",
   "version": "1.0.0",
   "dependencies": {
-    "@ohos/common": "../../common"
+    "@ohos/common": "../../common",
+    "@ohos/pagedesktop": "../pagedesktop"
   }
 }
