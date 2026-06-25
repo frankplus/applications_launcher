@@ -27,6 +27,11 @@ const TAG = 'NavigationBarCommonEventManager';
  */
 class NavigationBarCommonEventManager {
   private static NAVIGATION_BAR_HIDE = 'systemui.event.NAVIGATIONBAR_HIDE';
+  // Complement of NAVIGATION_BAR_HIDE: systemui publishes this when 3-button
+  // mode becomes active. Without it the launcher only ever hears about gesture
+  // mode ('0') and never learns the bar is back, so the bottom-edge swipe
+  // monitor (GestureNavHost) keeps consuming the nav bar's own button taps.
+  private static NAVIGATION_BAR_SHOW = 'systemui.event.NAVIGATIONBAR_SHOW';
   private static subscriber: commonEventMgr.CommonEventSubscriber;
   private static eventCallback: AsyncCallback<commonEventMgr.CommonEventData>;
 
@@ -49,7 +54,10 @@ class NavigationBarCommonEventManager {
       return;
     }
     const subscribeInfo: commonEventMgr.CommonEventSubscribeInfo = {
-      events: [NavigationBarCommonEventManager.NAVIGATION_BAR_HIDE]
+      events: [
+        NavigationBarCommonEventManager.NAVIGATION_BAR_HIDE,
+        NavigationBarCommonEventManager.NAVIGATION_BAR_SHOW
+      ]
     };
     commonEventMgr.createSubscriber(subscribeInfo).then(
       (commonEventSubscriber: commonEventMgr.CommonEventSubscriber) => {
@@ -90,6 +98,12 @@ class NavigationBarCommonEventManager {
         setTimeout(() => {
           localEventManager.sendLocalEventSticky(EventConstants.EVENT_NAVIGATOR_BAR_STATUS_CHANGE, '0');
         }, 30)
+        break;
+      case NavigationBarCommonEventManager.NAVIGATION_BAR_SHOW:
+        setTimeout(() => {
+          localEventManager.sendLocalEventSticky(EventConstants.EVENT_NAVIGATOR_BAR_STATUS_CHANGE, '1');
+        }, 30)
+        break;
       default:
         break;
     }
